@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-void: #050505;
+  --color-bone: #f0f0f0;
+  --color-acid: #ccff00;
+  --color-alert: #ff3b3b; /* 사망·실패·연결 끊김 */
+  --color-charcoal: #222222;
+
+  --font-mono: var(--font-jetbrains-mono), var(--font-nanum-coding), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --animate-blink: blink 1s step-end infinite;
+  --animate-fade-in: fade-in 0.3s ease-out both;
+  --animate-card-in: card-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.1s both;
+
+  @keyframes blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes card-in {
+    from {
+      opacity: 0;
+      transform: translateY(16px) scale(0.98);
+    }
+  }
+}
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(240 240 240 / 0.12) transparent;
+}
+
+html,
+body {
+  background: var(--color-void);
+  color: var(--color-bone);
+}
+
+::selection {
+  background: var(--color-acid);
+  color: var(--color-void);
+}
