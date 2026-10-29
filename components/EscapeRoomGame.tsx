@@ -1,15 +1,15 @@
 "use client";
 
 /**
- * ESCAPE_ — 텍스트 방탈출 TRPG 컨테이너 컴포넌트 (단일 파일)
+ * ESCAPE_ — 텍스트 방탈출 TRPG 컨테이너 컴포넌트
  *
- * - 필요한 것: React 18+ / Tailwind CSS (v3.4+ 또는 v4)
- * - 색상·애니메이션을 전부 이 파일 안에서 정의하므로 tailwind 설정 추가 없이 바로 동작한다.
- * - 지금은 setTimeout + Mock JSON으로 AI 응답을 흉내 낸다.
- *   실제 API 연결 시 submit() 안의 getMockResponse() 호출만 fetch로 바꾸면 된다.
+ * AI 게임마스터 응답은 서버 라우트(/api/gm)를 통해 받는다.
+ * API 키는 서버에만 있고 이 파일에는 들어오지 않는다.
  */
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { getEnding, type Ending, type FinalStats, type GameMasterTurn } from "@/lib/gameMasterSchema";
+import { RESTROOM_SCENARIO } from "@/lib/prompts/gameMasterPrompt";
 
 /* ════════════════════════════════ 타입 ════════════════════════════════ */
 
@@ -23,44 +23,34 @@ interface LogEntry {
   alert?: boolean;
 }
 
-interface FinalStats {
-  logic: number;
-  wit: number;
-  turns_taken: number;
-  hidden_tags: string[];
-  best_quote: string;
-  ai_comment: string;
-}
-
-/** AI 게임마스터 응답 JSON */
-interface GameMasterTurn {
-  description: string;
-  is_game_over: boolean;
-  final_stats: FinalStats;
-}
-
 type GameStatus = "playing" | "over";
-type Ending = "escaped" | "dead" | "game_over";
 
 interface GameResult {
   ending: Ending;
   stats: FinalStats;
 }
 
+/** 서버에 되돌려 보낼 대화 기록 한 줄 */
+interface ApiMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 /* ════════════════════════════════ 설정 ════════════════════════════════ */
 
-const LOCATION = "ABANDONED_RESTROOM";
-const MOCK_DELAY_MS = 900;
+const LOCATION = RESTROOM_SCENARIO.location;
+const MAX_INPUT_LENGTH = 500;
 
 const INITIAL_HISTORY: LogEntry[] = [
   { id: 0, role: "system", text: "SESSION 01 — CONNECTION ESTABLISHED" },
-  { id: 1, role: "system", text: "MOCK MODE — 키워드: 거울 / 동전 / 칸 / 문 / 환풍구 / 변기 물로 벽을 부순다" },
   {
-    id: 2,
+    id: 1,
     role: "gm",
     text: "눈을 뜨자 차가운 타일 바닥이 뺨에 닿는다.\n형광등 하나가 불규칙하게 깜빡이고, 세면대 위의 거울에는 금이 가 있다.\n출입문은 밖에서 잠겨 있다.",
   },
 ];
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
 
 const ENDING_THEME = {
   escaped: {
@@ -90,129 +80,33 @@ const KEYFRAMES = `
 @keyframes escPulse { 50% { opacity: 0.35 } }
 `;
 
-/* ════════════════════════════════ Mock 응답 (API가 돌려줄 raw JSON 문자열) ════════════════════════════════ */
 
-/** 진행 중 응답의 {{input}}은 유저 입력으로 치환된다 (GM이 best_quote 후보를 고르는 흉내) */
-const MOCK_JSON = {
-  // Step 2 Mock Data — 사망 엔딩
-  toiletWall: String.raw`{
-    "description": "당신은 변기 급수관을 붙잡고 온몸으로 비틀어 뜯어낸다. 물줄기가 벽을 향해 힘차게 뿜어져 나온다. 정확히는 정원 호스의 절반쯤 되는 기세로.\n타일은 한 장도 흔들리지 않는다. 대신 휴지 뭉치로 막힌 바닥 배수구가 물을 거부하고, 수위는 성실하게 발목까지 차오른다.\n그때 세면대 아래, 아까부터 파직거리던 콘센트가 반갑게 인사한다.\n형광등이 마지막으로 한 번 깜빡인다. 이번엔 당신도 같이.\n[SIGNAL LOST] 사인: 감전. 벽은 무사하다.",
-    "is_game_over": true,
-    "final_stats": {
-      "logic": 14,
-      "wit": 81,
-      "turns_taken": 9,
-      "hidden_tags": ["--tag #수압_과대평가", "--tag #변기_공학도", "--tag #감전_엔딩"],
-      "best_quote": "화장실 변기 물로 벽을 부순다",
-      "ai_comment": "물방울이 바위를 뚫는 데는 천 년이 걸립니다. 당신에겐 그만한 턴이 없었고요."
-    }
-  }`,
+/* ════════════════════════════════ API 호출 ════════════════════════════════ */
 
-  // 탈출 성공 엔딩
-  escaped: String.raw`{
-    "description": "당신은 변기 뚜껑을 밟고 올라서서 삭은 환풍구 커버를 단번에 뜯어낸다. 나사 네 개가 바닥에 떨어지며 박수 소리를 낸다.\n덕트 안은 좁고, 먼지 맛이 나고, 놀랍게도 전부 오르막이다. 보일러실 창살 너머로 새벽 공기가 들어온다.\n[ESCAPED] 생각보다 빨리 출구를 찾았다. GM은 조금 심심하다.",
-    "is_game_over": true,
-    "final_stats": {
-      "logic": 88,
-      "wit": 95,
-      "turns_taken": 4,
-      "hidden_tags": ["--tag #광기의_연금술사", "--tag #단답형_극가성비", "--tag #탈출_성공"],
-      "best_quote": "휴지심으로 블랙홀을 만든다",
-      "ai_comment": "블랙홀은 실패했지만, 그 자신감으로 환풍구를 뜯었으니 결과적으로 과학의 승리입니다."
-    }
-  }`,
-
-  mirror: String.raw`{
-    "description": "금 간 거울 속 당신은 생각보다 초췌하다. 거울을 톡톡 두드리자 벽 너머에서 속이 빈 소리가 난다.\n다른 벽과는 확실히 다른 소리다.",
-    "is_game_over": false,
-    "final_stats": { "logic": 48, "wit": 22, "turns_taken": 0, "hidden_tags": [], "best_quote": "{{input}}", "ai_comment": "" }
-  }`,
-
-  coin: String.raw`{
-    "description": "배수구에 손가락을 넣어 녹슨 100원 동전을 건져낸다. 1998년산. 당신보다 이 방에 오래 있었을 가능성이 높다.\n[획득] 녹슨 100원 동전",
-    "is_game_over": false,
-    "final_stats": { "logic": 62, "wit": 25, "turns_taken": 0, "hidden_tags": [], "best_quote": "{{input}}", "ai_comment": "" }
-  }`,
-
-  stall: String.raw`{
-    "description": "가장 안쪽 칸의 문은 꿈쩍하지 않는다. 잠금장치 바깥쪽에 일자 홈이 파여 있다.\n드라이버나, 그 비슷하게 얇고 납작한 무언가가 딱 들어갈 크기다.",
-    "is_game_over": false,
-    "final_stats": { "logic": 58, "wit": 20, "turns_taken": 0, "hidden_tags": [], "best_quote": "{{input}}", "ai_comment": "" }
-  }`,
-
-  door: String.raw`{
-    "description": "철문을 힘껏 걷어찬다. 문은 꿈쩍도 않고, 당신의 발가락만 격렬하게 항의한다.\n밖에서 걸쇠가 달그락거릴 뿐이다.",
-    "is_game_over": false,
-    "final_stats": { "logic": 25, "wit": 35, "turns_taken": 0, "hidden_tags": [], "best_quote": "{{input}}", "ai_comment": "" }
-  }`,
-
-  fallback: [
-    String.raw`{
-      "description": "방은 당신의 시도에 아무런 감명도 받지 않는다.\n형광등이 한 번 깜빡인다. 비웃음인지 전압 문제인지는 알 수 없다.",
-      "is_game_over": false,
-      "final_stats": { "logic": 30, "wit": 40, "turns_taken": 0, "hidden_tags": [], "best_quote": "{{input}}", "ai_comment": "" }
-    }`,
-    String.raw`{
-      "description": "그럴듯한 계획이다. 적어도 당신 머릿속에서는. 현실의 타일 벽은 여전히 타일 벽이다.\n세면대 배수구 쪽에서 녹슨 무언가가 희미하게 반짝인다.",
-      "is_game_over": false,
-      "final_stats": { "logic": 35, "wit": 45, "turns_taken": 0, "hidden_tags": [], "best_quote": "{{input}}", "ai_comment": "" }
-    }`,
-  ],
-};
-
-/** 유저 입력에 맞는 Mock 응답(raw JSON 문자열) 고르기 */
-function getMockResponse(input: string, turn: number): string {
-  let raw: string;
-  if (/변기/.test(input) && /벽/.test(input)) raw = MOCK_JSON.toiletWall;
-  else if (/환풍구/.test(input)) raw = MOCK_JSON.escaped;
-  else if (/거울/.test(input)) raw = MOCK_JSON.mirror;
-  else if (/동전|배수구/.test(input)) raw = MOCK_JSON.coin;
-  else if (/칸|잠금/.test(input)) raw = MOCK_JSON.stall;
-  else if (/문/.test(input)) raw = MOCK_JSON.door;
-  else raw = MOCK_JSON.fallback[turn % MOCK_JSON.fallback.length];
-
-  // JSON 문자열 안에 안전하게 넣기 위해 이스케이프
-  return raw.replaceAll("{{input}}", JSON.stringify(input).slice(1, -1));
+interface GameMasterResponse {
+  turn: GameMasterTurn;
+  exchange: ApiMessage[];
 }
 
-/* ════════════════════════════════ 파싱 ════════════════════════════════ */
+async function requestGameMaster(
+  input: string,
+  turn: number,
+  history: ApiMessage[],
+  signal: AbortSignal,
+): Promise<GameMasterResponse> {
+  const res = await fetch("/api/gm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input, turn, history }),
+    signal,
+  });
 
-const clampScore = (n: unknown) => Math.min(100, Math.max(0, Math.round(Number(n) || 0)));
-
-/** AI 응답 문자열 → GameMasterTurn. 형식이 틀리면 throw */
-function parseGameMasterResponse(raw: string): GameMasterTurn {
-  // 모델이 ```json 코드 블록으로 감싸 보내는 경우 대비
-  const cleaned = raw.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
-  const data = JSON.parse(cleaned);
-
-  if (typeof data?.description !== "string" || typeof data?.is_game_over !== "boolean" || !data?.final_stats) {
-    throw new Error("Invalid game master response");
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error ?? "게임마스터와 연결하지 못했습니다.");
   }
-
-  const s = data.final_stats;
-  return {
-    description: data.description,
-    is_game_over: data.is_game_over,
-    final_stats: {
-      logic: clampScore(s.logic),
-      wit: clampScore(s.wit),
-      turns_taken: Math.max(0, Math.round(Number(s.turns_taken) || 0)),
-      hidden_tags: Array.isArray(s.hidden_tags) ? s.hidden_tags.filter((t: unknown) => typeof t === "string") : [],
-      best_quote: typeof s.best_quote === "string" ? s.best_quote : "",
-      ai_comment: typeof s.ai_comment === "string" ? s.ai_comment : "",
-    },
-  };
+  return res.json();
 }
-
-/** description 마지막 줄의 결말 마커로 엔딩 판별 */
-function getEnding(turn: GameMasterTurn): Ending | null {
-  if (!turn.is_game_over) return null;
-  if (turn.description.includes("[ESCAPED]")) return "escaped";
-  if (turn.description.includes("[SIGNAL LOST]")) return "dead";
-  return "game_over";
-}
-
-const pad2 = (n: number) => String(n).padStart(2, "0");
 
 /* ════════════════════════════════ 컨테이너 ════════════════════════════════ */
 
@@ -226,9 +120,11 @@ export default function EscapeRoomGame() {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const nextIdRef = useRef(INITIAL_HISTORY.length);
   const turnRef = useRef(0);
+  // 서버는 상태를 갖지 않으므로 대화 기록을 여기서 들고 매번 함께 보낸다
+  const apiHistoryRef = useRef<ApiMessage[]>([]);
   // ↑ / ↓ 명령어 히스토리 (렌더와 무관하므로 ref)
   const commandsRef = useRef<string[]>([]);
   const commandCursorRef = useRef(-1);
@@ -239,11 +135,16 @@ export default function EscapeRoomGame() {
   const appendLog = (role: Role, text: string, alert = false) =>
     setHistory((prev) => [...prev, { id: nextIdRef.current++, role, text, alert }]);
 
-  const submit = () => {
+  const submit = async () => {
     const command = input.trim();
     if (!command || isThinking || isOver) return;
 
-    const turn = ++turnRef.current;
+    if (command.length > MAX_INPUT_LENGTH) {
+      appendLog("system", `행동은 ${MAX_INPUT_LENGTH}자까지 입력할 수 있습니다.`, true);
+      return;
+    }
+
+    const turn = turnRef.current + 1;
     commandsRef.current.unshift(command);
     commandCursorRef.current = -1;
 
@@ -251,34 +152,46 @@ export default function EscapeRoomGame() {
     setInput("");
     setIsThinking(true);
 
-    timerRef.current = setTimeout(() => {
-      try {
-        const raw = getMockResponse(command, turn); // ← 실제 API 연결 시 교체
-        const response = parseGameMasterResponse(raw);
-        response.final_stats.turns_taken = turn; // 턴 수는 클라이언트가 센 값이 기준
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-        const ending = getEnding(response);
-        const isFailure = ending !== null && ending !== "escaped";
-        appendLog("gm", response.description, isFailure);
+    try {
+      const { turn: response, exchange } = await requestGameMaster(
+        command,
+        turn,
+        apiHistoryRef.current,
+        controller.signal,
+      );
 
-        if (ending) {
-          appendLog("system", isFailure ? "SESSION TERMINATED — GAME OVER" : "SESSION TERMINATED — ESCAPED", isFailure);
-          setResult({ ending, stats: response.final_stats });
-          setGameStatus("over");
-          setIsCardOpen(true);
-        }
-      } catch {
-        appendLog("system", "SIGNAL LOST — 응답을 해석하지 못했습니다. 다시 입력하세요.", true);
-      } finally {
-        setIsThinking(false);
+      // 요청이 성공한 뒤에만 턴과 대화 기록을 확정한다
+      turnRef.current = turn;
+      apiHistoryRef.current = [...apiHistoryRef.current, ...exchange];
+
+      const ending = getEnding(response);
+      const isFailure = ending !== null && ending !== "escaped";
+      appendLog("gm", response.description, isFailure);
+
+      if (ending) {
+        appendLog("system", isFailure ? "SESSION TERMINATED — GAME OVER" : "SESSION TERMINATED — ESCAPED", isFailure);
+        setResult({ ending, stats: response.final_stats });
+        setGameStatus("over");
+        setIsCardOpen(true);
       }
-    }, MOCK_DELAY_MS);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return; // 재시작으로 취소됨
+      // 실패한 턴은 세지 않으므로 그대로 다시 입력하면 된다
+      appendLog("system", `SIGNAL LOST — ${error instanceof Error ? error.message : "연결 실패"}`, true);
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+      setIsThinking(false);
+    }
   };
 
   const restart = () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
+    abortRef.current?.abort();
     nextIdRef.current = INITIAL_HISTORY.length;
     turnRef.current = 0;
+    apiHistoryRef.current = [];
     setHistory(INITIAL_HISTORY);
     setInput("");
     setResult(null);
@@ -318,10 +231,8 @@ export default function EscapeRoomGame() {
     if (!isThinking && gameStatus === "playing") inputRef.current?.focus();
   }, [isThinking, gameStatus]);
 
-  // 언마운트 시 대기 중인 타이머 정리
-  useEffect(() => () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-  }, []);
+  // 언마운트 시 진행 중인 요청 취소
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   return (
     <main
@@ -368,6 +279,7 @@ export default function EscapeRoomGame() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
+              maxLength={MAX_INPUT_LENGTH}
               disabled={isOver || isThinking}
               autoFocus
               spellCheck={false}

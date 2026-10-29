@@ -30,3 +30,6 @@ pnpm-debug.log*
 
 # Claude Code 로컬 설정 (이 Mac 전용 경로 포함)
 .claude/
+
+# typescript build info
+*.tsbuildinfo

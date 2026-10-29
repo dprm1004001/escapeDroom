@@ -1,62 +1,31 @@
-/** AI 게임마스터가 매 턴 반환하는 JSON */
-export interface GameMasterTurn {
-  description: string;
-  is_game_over: boolean;
-  final_stats: FinalStats;
-}
-
-export interface FinalStats {
-  /** 행동의 논리성 (0~100) */
-  logic: number;
-  /** 창의성/유머 (0~100) */
-  wit: number;
-  /** 소요된 턴 수 */
-  turns_taken: number;
-  /** CLI 스타일 해시태그, 예: "--tag #광기의_연금술사" */
-  hidden_tags: string[];
-  /** 유저 입력 중 가장 골때리거나 결정적이었던 한 줄 (원문 그대로) */
-  best_quote: string;
-  /** 게임마스터의 한 줄 평가 */
-  ai_comment: string;
-}
+import { z } from "zod";
 
 /**
- * Structured outputs(`output_config.format`)용 JSON Schema.
- * API가 minimum/maximum 같은 수치 제약을 지원하지 않으므로 범위는 description에만 적고,
- * 서버에서 clampStats()로 한 번 더 보정한다.
+ * AI 게임마스터가 매 턴 반환하는 JSON.
+ * 이 Zod 스키마가 곧 구조화 출력(structured outputs) 스키마이자 런타임 검증기다.
+ *
+ * 주의: API의 JSON Schema는 minimum/maximum 같은 수치 제약을 지원하지 않는다.
+ * 점수 범위는 describe()로만 알려주고, 실제 보정은 clampStats()가 한다.
  */
-export const GAME_MASTER_RESPONSE_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["description", "is_game_over", "final_stats"],
-  properties: {
-    description: {
-      type: "string",
-      description: "현재 상황 묘사 및 유저 행동의 결과. 마크다운 없이 평문, 줄바꿈은 \\n.",
-    },
-    is_game_over: {
-      type: "boolean",
-      description: "탈출 성공 또는 사망/실패로 게임이 끝났으면 true.",
-    },
-    final_stats: {
-      type: "object",
-      additionalProperties: false,
-      required: ["logic", "wit", "turns_taken", "hidden_tags", "best_quote", "ai_comment"],
-      properties: {
-        logic: { type: "integer", description: "행동의 논리성 점수, 0~100" },
-        wit: { type: "integer", description: "창의성/유머 점수, 0~100" },
-        turns_taken: { type: "integer", description: "소요된 턴 수" },
-        hidden_tags: {
-          type: "array",
-          items: { type: "string" },
-          description: '게임 종료 시 부여하는 태그. 형식: "--tag #태그_이름". 진행 중에는 빈 배열.',
-        },
-        best_quote: { type: "string", description: "유저 입력 중 한 줄, 원문 그대로" },
-        ai_comment: { type: "string", description: "게임마스터의 한 줄 평가. 진행 중에는 빈 문자열." },
-      },
-    },
-  },
-} as const;
+export const FinalStatsSchema = z.object({
+  logic: z.number().int().describe("행동의 논리성 점수, 0~100"),
+  wit: z.number().int().describe("창의성/유머 점수, 0~100"),
+  turns_taken: z.number().int().describe("소요된 턴 수"),
+  hidden_tags: z
+    .array(z.string())
+    .describe('게임 종료 시 부여하는 태그. 형식: "--tag #태그_이름". 진행 중에는 빈 배열.'),
+  best_quote: z.string().describe("유저 입력 중 한 줄, 원문 그대로"),
+  ai_comment: z.string().describe("게임마스터의 한 줄 평가. 진행 중에는 빈 문자열."),
+});
+
+export const GameMasterTurnSchema = z.object({
+  description: z.string().describe("현재 상황 묘사 및 유저 행동의 결과. 마크다운 없이 평문, 줄바꿈은 \\n."),
+  is_game_over: z.boolean().describe("탈출 성공 또는 사망/실패로 게임이 끝났으면 true."),
+  final_stats: FinalStatsSchema,
+});
+
+export type FinalStats = z.infer<typeof FinalStatsSchema>;
+export type GameMasterTurn = z.infer<typeof GameMasterTurnSchema>;
 
 const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, Math.round(n)));
 
